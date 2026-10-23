@@ -29,6 +29,18 @@ def upsert(spark: SparkSession, df: DataFrame, table: str, keys: list[str], newe
     )
 
 
+def insert_new(spark: SparkSession, df: DataFrame, table: str, keys: list[str]) -> None:
+    """Insert only rows whose keys are not in the table yet (idempotent append)."""
+    if not spark.catalog.tableExists(table):
+        df.write.format("delta").saveAsTable(table)
+        return
+
+    from delta.tables import DeltaTable
+
+    on = " AND ".join(f"t.{k} = s.{k}" for k in keys)
+    DeltaTable.forName(spark, table).alias("t").merge(df.alias("s"), on).whenNotMatchedInsertAll().execute()
+
+
 def append(df: DataFrame, table: str) -> None:
     df.write.format("delta").mode("append").saveAsTable(table)
 

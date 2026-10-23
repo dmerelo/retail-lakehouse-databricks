@@ -49,6 +49,11 @@ class Tables:
     def silver_stores(self) -> str:
         return self.fq("silver_stores")
 
+    @property
+    def run_metrics(self) -> str:
+        """One row per layer/entity per job run: rows in, valid, rejected, duration."""
+        return self.fq("run_metrics")
+
     # gold: star schema and aggregates for BI
     @property
     def dim_date(self) -> str:

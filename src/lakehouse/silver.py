@@ -37,14 +37,19 @@ def dedupe_latest(df: DataFrame, keys: list[str], order_by: list[str]) -> DataFr
 
 
 def to_quarantine(invalid: DataFrame, entity: str) -> DataFrame:
+    """One row per rejected record. ``row_hash`` identifies the same record from
+    the same file, so replaying a file does not quarantine it twice; the same
+    record re-sent in another file is a new occurrence and is kept."""
     payload_cols = [c for c in invalid.columns if not c.startswith("_")]
+    payload = F.to_json(F.struct(*payload_cols))
     return invalid.select(
+        F.sha2(F.concat_ws("||", F.lit(entity), F.col("_source_file"), payload), 256).alias("row_hash"),
         F.lit(entity).alias("entity"),
-        F.to_json(F.struct(*payload_cols)).alias("payload"),
+        payload.alias("payload"),
         F.col("_failed_rules").alias("failed_rules"),
         F.col("_source_file").alias("source_file"),
         F.col("_quarantined_at").alias("quarantined_at"),
-    )
+    ).dropDuplicates(["row_hash"])
 
 
 # --- sales -------------------------------------------------------------------
@@ -97,7 +102,7 @@ def process_sales_batch(spark: SparkSession, batch: DataFrame, t: Tables) -> dic
     valid, invalid = validate_sales(clean_sales(batch), spark.table(t.silver_stores))
     counts = {"valid": valid.count(), "quarantined": invalid.count()}
     delta_io.upsert(spark, valid, t.silver_sales, ["transaction_id", "line_number"], newer_than="_ingested_at")
-    delta_io.append(to_quarantine(invalid, "sales"), t.silver_quarantine)
+    delta_io.insert_new(spark, to_quarantine(invalid, "sales"), t.silver_quarantine, ["row_hash"])
     return counts
 
 
@@ -134,7 +139,7 @@ def process_products_batch(spark: SparkSession, batch: DataFrame, t: Tables) -> 
     valid = dedupe_latest(valid, ["sku", "updated_at"], ["_ingested_at"])
     counts = {"valid": valid.count(), "quarantined": invalid.count()}
     delta_io.upsert(spark, valid, t.silver_products, ["sku", "updated_at"], newer_than="_ingested_at")
-    delta_io.append(to_quarantine(invalid, "products"), t.silver_quarantine)
+    delta_io.insert_new(spark, to_quarantine(invalid, "products"), t.silver_quarantine, ["row_hash"])
     return counts
 
 
@@ -168,5 +173,5 @@ def process_stores_batch(spark: SparkSession, batch: DataFrame, t: Tables) -> di
     valid = dedupe_latest(valid, ["store_code"], ["updated_at", "_ingested_at"])
     counts = {"valid": valid.count(), "quarantined": invalid.count()}
     delta_io.upsert(spark, valid, t.silver_stores, ["store_code"], newer_than="updated_at")
-    delta_io.append(to_quarantine(invalid, "stores"), t.silver_quarantine)
+    delta_io.insert_new(spark, to_quarantine(invalid, "stores"), t.silver_quarantine, ["row_hash"])
     return counts
