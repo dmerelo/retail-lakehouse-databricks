@@ -1,8 +1,21 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
-name = "retail-lakehouse"
+name = "retail_lakehouse"
 version = "0.1.0"
 description = "Retail sell-out lakehouse on Databricks: medallion layers, SCD2 and data quality on Delta Lake"
 requires-python = ">=3.10"
+
+# Entry points used by the Databricks job (python_wheel_task)
+[project.scripts]
+lakehouse-bronze = "lakehouse.jobs:bronze_main"
+lakehouse-silver = "lakehouse.jobs:silver_main"
+lakehouse-gold = "lakehouse.jobs:gold_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

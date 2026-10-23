@@ -6,3 +6,6 @@ metastore_db/
 derby.log
 .databricks/
 .venv/
+dist/
+build/
+*.egg-info/
