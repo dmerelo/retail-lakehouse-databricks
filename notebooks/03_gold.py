@@ -13,7 +13,7 @@ from datetime import date, timedelta
 
 sys.path.append(os.path.abspath("../src"))
 
-from lakehouse import pipeline
+from lakehouse import jobs
 from lakehouse.config import Tables
 
 dbutils.widgets.text("catalog", "workspace")
@@ -24,12 +24,14 @@ dbutils.widgets.text("lookback_days", "7")
 t = Tables(dbutils.widgets.get("catalog"), dbutils.widgets.get("schema"))
 end = date.fromisoformat(dbutils.widgets.get("run_date") or date.today().isoformat())
 start = end - timedelta(days=int(dbutils.widgets.get("lookback_days")))
-print(f"window: {start} .. {end}")
 
 # COMMAND ----------
 
-pipeline.refresh_dimensions(spark, t)
-print(pipeline.refresh_facts(spark, t, start, end))
+m = jobs.Metrics(spark, t, run_id="manual")
+try:
+    jobs.run_gold(spark, t, m, start, end)
+finally:
+    m.flush()
 
 # COMMAND ----------
 

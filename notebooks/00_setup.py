@@ -3,6 +3,7 @@
 # MAGIC # 00 · Setup
 # MAGIC Creates the schema and the volumes, then writes a sample of raw files into the landing volume.
 # MAGIC Run once before the job (and again with a later `end_date` to simulate new days arriving).
+# MAGIC `reset = true` drops the whole schema first (tables, volumes and checkpoints) to start clean.
 
 # COMMAND ----------
 
@@ -10,11 +11,15 @@ dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "retail")
 dbutils.widgets.text("days", "14")
 dbutils.widgets.text("end_date", "")  # empty = today
+dbutils.widgets.dropdown("reset", "false", ["false", "true"])
 
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 
 # COMMAND ----------
+
+if dbutils.widgets.get("reset") == "true":
+    spark.sql(f"DROP SCHEMA IF EXISTS {catalog}.{schema} CASCADE")
 
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.landing")

@@ -12,35 +12,16 @@ import sys
 
 sys.path.append(os.path.abspath("../src"))
 
-from lakehouse import silver
+from lakehouse import jobs
 from lakehouse.config import Tables
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "retail")
 t = Tables(dbutils.widgets.get("catalog"), dbutils.widgets.get("schema"))
-checkpoints = f"/Volumes/{t.catalog}/{t.schema}/checkpoints"
 
 # COMMAND ----------
 
-
-def run(entity: str, source_table: str, process) -> None:
-    def per_batch(batch_df, batch_id):
-        counts = process(batch_df.sparkSession, batch_df, t)
-        print(f"{entity} batch {batch_id}: {counts}")
-
-    (
-        spark.readStream.table(source_table)
-        .writeStream.foreachBatch(per_batch)
-        .option("checkpointLocation", f"{checkpoints}/silver_{entity}")
-        .trigger(availableNow=True)
-        .start()
-        .awaitTermination()
-    )
-
-
-run("stores", t.bronze_stores, silver.process_stores_batch)
-run("products", t.bronze_products, silver.process_products_batch)
-run("sales", t.bronze_sales, silver.process_sales_batch)
+jobs.run_silver(spark, t, jobs.Metrics(spark, t, run_id="manual"))
 
 # COMMAND ----------
 

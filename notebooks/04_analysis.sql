@@ -47,3 +47,14 @@ SELECT to_date(quarantined_at) AS day, entity, rule, count(*) AS rows
 FROM silver_quarantine LATERAL VIEW explode(failed_rules) r AS rule
 GROUP BY ALL
 ORDER BY day DESC, rows DESC;
+
+-- COMMAND ----------
+
+-- Pipeline health: rows and duration per layer for the last runs
+SELECT run_id, layer, entity,
+       sum(rows_in) AS rows_in, sum(rows_valid) AS valid, sum(rows_rejected) AS rejected,
+       round(sum(duration_s), 1) AS seconds, max(finished_at) AS finished_at
+FROM run_metrics
+GROUP BY ALL
+ORDER BY finished_at DESC
+LIMIT 30;
