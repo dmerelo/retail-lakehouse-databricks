@@ -1,0 +1,18 @@
+bundle:
+  name: retail-lakehouse
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for all tables and volumes
+    default: workspace
+  schema:
+    description: Schema that holds bronze, silver and gold tables
+    default: retail
+
+targets:
+  dev:
+    mode: development
+    default: true
