@@ -28,6 +28,9 @@ jobs:
           ruff check .
           ruff format --check .
 
+      - name: Build the wheel the job installs
+        run: pip wheel . --no-deps -w dist
+
       - name: Tests (including end-to-end on Delta Lake)
         env:
           RUN_DELTA_TESTS: "1"
