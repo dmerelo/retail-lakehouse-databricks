@@ -2,7 +2,7 @@
 
 [![ci](https://github.com/dmerelo/retail-lakehouse-databricks/actions/workflows/ci.yml/badge.svg)](https://github.com/dmerelo/retail-lakehouse-databricks/actions/workflows/ci.yml)
 
-Daily point-of-sale files from a chain of 12 stores, plus product and store master data, turned into a star schema that a BI tool can query. Built on Databricks with Delta Lake, Unity Catalog volumes, Auto Loader and a serverless job defined as a Databricks Asset Bundle.
+Daily point-of-sale files from a chain of 12 stores, plus product and store master data, turned into a star schema that a BI tool can query. Built on Databricks with Delta Lake, Unity Catalog volumes, Auto Loader and a serverless job that runs the code as a Python wheel, deployed with Databricks Asset Bundles.
 
 The data is synthetic, but it breaks the way real retail feeds break: codes with stray spaces, lines re-sent the next day, sales arriving late, prices and categories changing mid-week. Most of the code exists to deal with that.
 
@@ -58,7 +58,7 @@ Grain of `fact_sales`: one line of a receipt. Each line points to the product **
 
 **Bronze keeps everything as strings.** If a file arrives with `quantity = "abc"`, that value is still in the lake and can be shown to the source team. Casting happens in silver with `try_cast` / `try_to_timestamp`, because Databricks runs with ANSI mode on and a plain cast would fail the whole batch.
 
-**Broken rows go to quarantine, not to /dev/null.** Every rule is a boolean column; a row that fails any rule lands in `silver_quarantine` with the list of rules it broke and the file it came from. A null result counts as a failure, so `quantity > 0` also catches a missing quantity.
+**Broken rows go to quarantine, not to /dev/null.** Every rule is a boolean column; a row that fails any rule lands in `silver_quarantine` with the list of rules it broke and the file it came from. A null result counts as a failure, so `quantity > 0` also catches a missing quantity. Quarantine inserts are keyed by a hash of (entity, file, record), so reprocessing a file does not count its errors twice.
 
 **Incremental by default, safe to rerun.** Auto Loader and the bronze-to-silver stream keep checkpoints, so each file and each bronze row is processed once. Silver MERGEs only overwrite a record when the incoming one is newer, so replaying an old file cannot undo a newer value.
 
@@ -68,7 +68,11 @@ Grain of `fact_sales`: one line of a receipt. Each line points to the product **
 
 **Stable surrogate keys.** `store_key = xxhash64(store_code)` and `product_key = xxhash64(sku, valid_from)`: no sequence table to maintain, and a rebuilt dimension keeps the same keys. Lookups that find nothing get the unknown member (`-1`); the run fails if more than 1% of fact lines end up there.
 
-**Serverless-friendly.** No `.cache()` (not supported on serverless), no cluster configuration in the job, notebooks import the package from `src/`.
+**Packaged, not pasted.** The job installs the project as a wheel and runs three console scripts (`lakehouse-bronze`, `-silver`, `-gold`) as `python_wheel_task`s on serverless compute. Notebooks call the same functions, so what runs on schedule is exactly what the tests cover. No `.cache()` anywhere (not supported on serverless).
+
+**Observable.** Every run writes rows read, valid, rejected and duration per layer and entity to `run_metrics`, tagged with the job run id. Silver writes its metrics from inside each micro-batch, because on serverless `foreachBatch` runs in a separate process.
+
+**Two targets.** `dev` (default) deploys a personal copy with the schedule paused; `prod` uses its own schema (`retail_prod`), keeps the schedule active and e-mails the owner on failure.
 
 ## Data quality rules
 
@@ -90,10 +94,17 @@ Fixable problems are fixed instead of rejected: `"  sku-1003 "` becomes `SKU-100
 
 1. *Workspace → Create → Git folder* and paste this repository URL.
 2. Open `notebooks/00_setup.py` and run it. It creates the `retail` schema, the `landing` and `checkpoints` volumes and 14 days of sample files.
-3. Either run `01_bronze`, `02_silver` and `03_gold` in order, or deploy the job: open `databricks.yml`, click *Deploy* in the bundle panel and run `retail-sales-daily`.
-4. `04_analysis.sql` has example queries (revenue by region and week, price before/after a list price change, rejected rows per rule).
+3. Run `01_bronze`, `02_silver` and `03_gold` in order.
+4. `04_analysis.sql` has example queries (revenue by region and week, price before/after a list price change, rejected rows per rule, run metrics).
 
-To simulate new days arriving, run `00_setup` again with a later `end_date` and rerun the job: only the new files are processed.
+To deploy the scheduled job instead, use the Databricks CLI from a clone of the repo (it builds the wheel and uploads it):
+
+```bash
+databricks bundle deploy -t dev     # or -t prod
+databricks bundle run retail_sales_daily -t dev
+```
+
+To simulate new days arriving, run `00_setup` again with a later `end_date` and rerun: only the new files are processed. `reset = true` in `00_setup` starts over from an empty schema.
 
 **Tests locally:**
 
@@ -108,16 +119,17 @@ CI runs both on every push.
 ## Layout
 
 ```
-databricks.yml                 bundle definition (catalog / schema variables)
-resources/retail_sales.job.yml serverless job: bronze -> silver -> gold, retries, schedule (paused)
-notebooks/                     thin entry points: widgets, streams, display
+databricks.yml                 bundle: wheel artifact, variables, dev / prod targets
+resources/retail_sales.job.yml serverless job: three python_wheel_tasks, retries, schedule, failure e-mail
+notebooks/                     interactive entry points (setup, one notebook per layer, analysis)
 src/lakehouse/
   bronze.py                    Auto Loader / batch readers, ingestion metadata
   silver.py                    cleaning, validation, dedup, MERGE
   quality.py                   rule engine and run-level checks
   scd.py                       SCD2 staging + MERGE
   gold.py                      dimensions, fact, aggregate
-  pipeline.py                  gold orchestration (shared by notebook and tests)
+  pipeline.py                  gold orchestration
+  jobs.py                      console scripts for the job + run metrics
   sample_data.py               synthetic feed with injected problems
 tests/                         unit tests + end-to-end test on Delta
 ```
@@ -127,4 +139,5 @@ tests/                         unit tests + end-to-end test on Delta
 - Read silver changes with Change Data Feed instead of re-reading `silver_products` to stage SCD2; fine at catalog size, not for a large dimension.
 - Move the rules to Lakeflow Declarative Pipelines expectations if the team standardizes on it; the rule list maps one to one.
 - Liquid clustering on `fact_sales` by `(sale_date, store_key)` instead of date partitions once volume grows.
-- Alerts on the quarantine table (rows per rule per day) rather than only failing on the unknown-product ratio.
+- A SQL alert on `run_metrics` / `silver_quarantine` (rejection rate per rule above a threshold) instead of relying only on job failure e-mails.
+- A service principal as `run_as` in `prod` instead of the deploying user.
