@@ -4,7 +4,7 @@ from pyspark.sql import functions as F
 
 from lakehouse.bronze import SALES_SCHEMA
 from lakehouse.quality import Rule, split_valid_invalid
-from lakehouse.silver import clean_products, clean_sales, dedupe_latest, validate_sales
+from lakehouse.silver import clean_products, clean_sales, dedupe_latest, to_quarantine, validate_sales
 
 COLS = [f.name for f in SALES_SCHEMA.fields]
 
@@ -112,3 +112,12 @@ def test_clean_products_normalizes_text(spark):
     )
     r = clean_products(df).first()
     assert (r.sku, r.product_name, r.brand, r.category) == ("SKU-1", "Vale Cacau Tablete", "Vale Cacau", "Chocolates")
+
+
+def test_quarantine_hash_is_stable_per_record_and_file(spark):
+    rows = [line(transaction_id="t2", sku=""), line(transaction_id="t2", sku="")]  # same broken line twice
+    _, invalid = validate_sales(clean_sales(bronze_sales(spark, rows)), stores(spark))
+    first = to_quarantine(invalid, "sales").collect()
+    again = to_quarantine(invalid, "sales").collect()
+    assert len(first) == 1  # duplicates inside a batch collapse
+    assert first[0].row_hash == again[0].row_hash

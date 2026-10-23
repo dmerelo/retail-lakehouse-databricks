@@ -10,7 +10,7 @@ import pytest
 from pyspark.sql import Window
 from pyspark.sql import functions as F
 
-from lakehouse import bronze, delta_io, pipeline, sample_data, silver
+from lakehouse import bronze, delta_io, jobs, pipeline, sample_data, silver
 from lakehouse.config import Tables
 
 pytestmark = pytest.mark.delta
@@ -96,8 +96,20 @@ def test_gold_rerun_is_idempotent(spark, lake):
     assert before == after
 
 
-def test_replaying_bronze_does_not_duplicate_silver(spark, lake):
+def test_replaying_bronze_does_not_duplicate_silver_or_quarantine(spark, lake):
     t, _ = lake
-    before = spark.table(t.silver_sales).count()
+    before = spark.table(t.silver_sales).count(), spark.table(t.silver_quarantine).count()
     silver.process_sales_batch(spark, spark.table(t.bronze_sales), t)
-    assert spark.table(t.silver_sales).count() == before
+    silver.process_products_batch(spark, spark.table(t.bronze_products), t)
+    assert (spark.table(t.silver_sales).count(), spark.table(t.silver_quarantine).count()) == before
+
+
+def test_gold_job_writes_run_metrics(spark, lake):
+    t, _ = lake
+    m = jobs.Metrics(spark, t, run_id="ci")
+    jobs.run_gold(spark, t, m, START, END)
+    m.flush()
+    rows = {r.entity: r for r in spark.table(t.run_metrics).filter("run_id = 'ci'").collect()}
+    assert set(rows) == {"dimensions", "fact_sales"}
+    assert rows["fact_sales"].rows_in == spark.table(t.fact_sales).count()
+    assert rows["fact_sales"].rows_rejected == 0
